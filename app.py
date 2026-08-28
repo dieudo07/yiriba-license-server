@@ -457,9 +457,11 @@ def admin_stats():
     })
 
 
+# ═══ INIT ═══
+init_db()
+
 # ═══ MAIN ═══
 if __name__ == "__main__":
-    init_db()
     print(f"\n{'='*50}")
     print(f"  YIRIBA LICENSE SERVER v1.0")
     print(f"  http://{HOST}:{PORT}")
