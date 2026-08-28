@@ -44,6 +44,13 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": str(e), "type": type(e).__name__}), 500
+
+
 # ═══ DATABASE ═══
 def get_db():
     if "db" not in g:
@@ -458,7 +465,10 @@ def admin_stats():
 
 
 # ═══ INIT ═══
-init_db()
+try:
+    init_db()
+except Exception as e:
+    print(f"[ERROR] init_db failed: {e}")
 
 # ═══ MAIN ═══
 if __name__ == "__main__":
