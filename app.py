@@ -14,9 +14,34 @@ from functools import wraps
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
+import time
+_rate_limits = {}
+def rate_limit(max_per_minute=30):
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            ip = request.remote_addr
+            now = time.time()
+            key = f"{ip}:{f.__name__}"
+            if key in _rate_limits:
+                timestamps = [t for t in _rate_limits[key] if now - t < 60]
+                _rate_limits[key] = timestamps
+                if len(timestamps) >= max_per_minute:
+                    return jsonify({"error": "Trop de requêtes. Réessayez dans 1 minute."}), 429
+            else:
+                _rate_limits[key] = []
+            _rate_limits[key].append(now)
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+
+
+
 # ═══ CONFIG ═══
 SECRET_KEY = os.environ.get("YIRIBA_SECRET", "SM-Licence-HMAC-2026-BurkinaFaso-SecretKey!@#$%")
-ADMIN_TOKEN = os.environ.get("YIRIBA_ADMIN_TOKEN", "yiriba-admin-2026")
+ADMIN_TOKEN = os.environ.get("YIRIBA_ADMIN_TOKEN", "")
+if not ADMIN_TOKEN:
+    import sys; print("WARNING: YIRIBA_ADMIN_TOKEN not set!"); sys.exit(1)
 DB_PATH = os.environ.get("YIRIBA_DB", "") or os.path.join(tempfile.gettempdir(), "yiriba_licenses.db")
 MAX_ACTIVATIONS = int(os.environ.get("YIRIBA_MAX_ACTIVATIONS", "5"))
 
@@ -149,6 +174,7 @@ def verify_license():
     })
 
 
+@rate_limit(10)
 @app.route("/api/license/activate", methods=["POST"])
 def activate_license():
     data = request.get_json(silent=True)
