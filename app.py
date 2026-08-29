@@ -163,7 +163,24 @@ def activate_license():
     db = get_db()
     lic = db.execute("SELECT * FROM licenses WHERE license_key = ?", (license_key,)).fetchone()
     if not lic:
-        return jsonify({"success": False, "error": "Licence inconnue"})
+        # Auto-enregistrer la licence si elle n'existe pas
+        pack = data.get("pack", "DEMO").strip().upper()
+        school = data.get("school_name", "").strip()
+        date_act = data.get("date_activation", datetime.now().strftime("%Y-%m-%d"))
+        pack_info = PACKS.get(pack, PACKS["DEMO"])
+        date_exp = ""
+        if pack_info["duree_jours"] > 0:
+            date_exp = (datetime.strptime(date_act, "%Y-%m-%d") + timedelta(days=pack_info["duree_jours"])).strftime("%Y-%m-%d")
+        try:
+            db.execute(
+                "INSERT INTO licenses (school_name, pack, hardware_id, license_key, date_activation, date_expiration, max_eleves, max_pc, version, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2.1', 'auto')",
+                (school, pack, hw_id, license_key, date_act, date_exp, pack_info["max_eleves"], data.get("nb_pc", 1))
+            )
+            db.commit()
+            lic = db.execute("SELECT * FROM licenses WHERE license_key = ?", (license_key,)).fetchone()
+            print(f"[AUTO-REGISTER] Licence '{school}' enregistrée automatiquement")
+        except Exception as e:
+            return jsonify({"success": False, "error": f"Erreur enregistrement: {e}"})
     if lic["is_revoked"]:
         return jsonify({"success": False, "error": "Licence révoquée"})
 
@@ -266,6 +283,48 @@ def admin_stats():
     return jsonify({"total": total, "active": active, "revoked": revoked, "by_pack": {r["pack"]: r["c"] for r in by_pack}})
 
 
+@app.route("/api/admin/revoke-quick", methods=["POST"])
+def admin_revoke_quick():
+    """Révoque une licence par nom d'école — protégé par un code simple."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "JSON requis"}), 400
+    school = data.get("school_name", "").strip()
+    code = data.get("code", "").strip()
+    if code != "yiriba-revoke-2026":
+        return jsonify({"error": "Code invalide"}), 403
+    if not school:
+        return jsonify({"error": "school_name requis"}), 400
+    db = get_db()
+    lic = db.execute("SELECT * FROM licenses WHERE school_name = ?", (school,)).fetchone()
+    if not lic:
+        return jsonify({"error": f'Aucune licence pour "{school}"'})
+    db.execute("UPDATE licenses SET is_revoked = 1, revoked_at = datetime('now') WHERE school_name = ?", (school,))
+    db.commit()
+    return jsonify({"success": True, "message": f"Licence '{school}' révoquée"})
+
+
+@app.route("/api/admin/reactivate-quick", methods=["POST"])
+def admin_reactivate_quick():
+    """Réactive une licence par nom d'école."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "JSON requis"}), 400
+    school = data.get("school_name", "").strip()
+    code = data.get("code", "").strip()
+    if code != "yiriba-revoke-2026":
+        return jsonify({"error": "Code invalide"}), 403
+    if not school:
+        return jsonify({"error": "school_name requis"}), 400
+    db = get_db()
+    lic = db.execute("SELECT * FROM licenses WHERE school_name = ?", (school,)).fetchone()
+    if not lic:
+        return jsonify({"error": f'Aucune licence pour "{school}"'})
+    db.execute("UPDATE licenses SET is_revoked = 0, revoked_at = '' WHERE school_name = ?", (school,))
+    db.commit()
+    return jsonify({"success": True, "message": f"Licence '{school}' réactivée"})
+
+
 @app.route("/api/admin/revoke", methods=["POST"])
 @require_admin
 def admin_revoke():
@@ -287,3 +346,5 @@ def admin_revoke():
 if __name__ == "__main__":
     print(f"\n  YIRIBA LICENSE SERVER v1.0 — {DB_PATH}\n")
     app.run(host="0.0.0.0", port=5000, debug=False)
+
+# redeploy Sat Aug 29 11:45:10     2026
