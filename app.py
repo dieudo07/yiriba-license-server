@@ -14,6 +14,21 @@ from functools import wraps
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
+
+# ═══ RATE LIMITER ═══
+import time as _time
+_rate_store = {}
+
+def _check_rate(key, limit=30):
+    now = _time.time()
+    if key not in _rate_store:
+        _rate_store[key] = []
+    _rate_store[key] = [t for t in _rate_store[key] if now - t < 60]
+    if len(_rate_store[key]) >= limit:
+        return False
+    _rate_store[key].append(now)
+    return True
+
 # ═══ ADMIN AUTH ═══
 import time as _time
 _admin_password = os.environ.get("YIRIBA_ADMIN_PASSWORD", "Yr@2026!S3cur3P@ss#BF")
@@ -185,9 +200,10 @@ def verify_license():
     })
 
 
-@rate_limit(10)
 @app.route("/api/license/activate", methods=["POST"])
 def activate_license():
+    if not _check_rate("activate:" + request.remote_addr, 10):
+        return jsonify({"error": "Trop de requêtes. Réessayez dans 1 minute."}), 429
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"success": False, "error": "JSON requis"}), 400
@@ -320,6 +336,7 @@ def admin_stats():
     return jsonify({"total": total, "active": active, "revoked": revoked, "by_pack": {r["pack"]: r["c"] for r in by_pack}})
 
 
+@require_admin
 @app.route("/api/admin/revoke-quick", methods=["POST"])
 def admin_revoke_quick():
     """Révoque une licence par nom d'école — protégé par un code simple."""
@@ -341,6 +358,7 @@ def admin_revoke_quick():
     return jsonify({"success": True, "message": f"Licence '{school}' révoquée"})
 
 
+@require_admin
 @app.route("/api/admin/reactivate-quick", methods=["POST"])
 def admin_reactivate_quick():
     """Réactive une licence par nom d'école."""
