@@ -248,7 +248,7 @@ def license_status():
 # ═══ ADMIN ENDPOINTS ═══
 
 @app.route("/api/admin/create", methods=["POST"])
-@require_admin
+@require_session
 def admin_create():
     data = request.get_json(silent=True)
     if not data:
@@ -291,7 +291,7 @@ def admin_create():
 
 
 @app.route("/api/admin/list", methods=["GET"])
-@require_admin
+@require_session
 def admin_list():
     db = get_db()
     rows = db.execute("SELECT * FROM licenses ORDER BY created_at DESC").fetchall()
@@ -299,7 +299,7 @@ def admin_list():
 
 
 @app.route("/api/admin/stats", methods=["GET"])
-@require_admin
+@require_session
 def admin_stats():
     db = get_db()
     total = db.execute("SELECT COUNT(*) as c FROM licenses").fetchone()["c"]
@@ -352,7 +352,7 @@ def admin_reactivate_quick():
 
 
 @app.route("/api/admin/revoke", methods=["POST"])
-@require_admin
+@require_session
 def admin_revoke():
     data = request.get_json(silent=True)
     if not data:
@@ -372,7 +372,7 @@ def admin_revoke():
 
 # ═══ ADMIN: ACTION LOGS ═══
 @app.route("/api/admin/logs", methods=["GET"])
-@require_admin
+@require_session
 def admin_logs():
     db = get_db()
     try:
@@ -384,7 +384,7 @@ def admin_logs():
     return jsonify([dict(l) for l in logs])
 
 @app.route("/api/admin/logs", methods=["POST"])
-@require_admin
+@require_session
 def admin_log_action():
     data = request.get_json(silent=True) or {}
     db = get_db()
@@ -397,7 +397,7 @@ def admin_log_action():
 
 # ═══ ADMIN: ANALYTICS ═══
 @app.route("/api/admin/analytics", methods=["GET"])
-@require_admin
+@require_session
 def admin_analytics():
     db = get_db()
     for t in [
@@ -428,7 +428,7 @@ def admin_analytics():
 
 # ═══ ADMIN: NOTIFICATIONS ═══
 @app.route("/api/admin/notifications", methods=["GET"])
-@require_admin
+@require_session
 def admin_get_notifications():
     db = get_db()
     try:
@@ -440,7 +440,7 @@ def admin_get_notifications():
     return jsonify([dict(n) for n in notifs])
 
 @app.route("/api/admin/notifications", methods=["POST"])
-@require_admin
+@require_session
 def admin_create_notification():
     data = request.get_json(silent=True)
     if not data: return jsonify({"error": "JSON requis"}), 400
@@ -456,7 +456,7 @@ def admin_create_notification():
     return jsonify({"success": True})
 
 @app.route("/api/admin/notifications/<int:notif_id>", methods=["DELETE"])
-@require_admin
+@require_session
 def admin_delete_notification(notif_id):
     db = get_db()
     db.execute("DELETE FROM notifications WHERE id = ?", (notif_id,))
@@ -472,7 +472,7 @@ def public_notifications():
 
 # ═══ ADMIN: PACKS CONFIG ═══
 @app.route("/api/admin/packs", methods=["GET"])
-@require_admin
+@require_session
 def admin_get_packs():
     db = get_db()
     try: packs = db.execute("SELECT * FROM pack_config ORDER BY id").fetchall()
@@ -487,7 +487,7 @@ def admin_get_packs():
     return jsonify([dict(p) for p in packs])
 
 @app.route("/api/admin/packs", methods=["PUT"])
-@require_admin
+@require_session
 def admin_update_packs():
     data = request.get_json(silent=True)
     if not data or "packs" not in data: return jsonify({"error": "packs requis"}), 400
@@ -500,7 +500,7 @@ def admin_update_packs():
 
 # ═══ ADMIN: ABUSE ═══
 @app.route("/api/admin/abuse", methods=["GET"])
-@require_admin
+@require_session
 def admin_abuse_check():
     db = get_db()
     try:
@@ -510,7 +510,7 @@ def admin_abuse_check():
 
 # ═══ ADMIN: EXPORT CSV ═══
 @app.route("/api/admin/export", methods=["GET"])
-@require_admin
+@require_session
 def admin_export():
     db = get_db()
     licenses = db.execute("SELECT * FROM licenses ORDER BY id").fetchall()
@@ -531,6 +531,46 @@ def public_packs():
     except:
         packs = []
     return jsonify([dict(p) for p in packs])
+
+
+
+# ═══ ADMIN: LOGIN ═══
+import hashlib, hmac, time
+
+_ADMIN_PASSWORD = os.environ.get("YIRIBA_ADMIN_PASSWORD", "Yr@2026!S3cur3P@ss#BF")
+_sessions = {}
+
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "JSON requis"}), 400
+    password = data.get("password", "")
+    # Constant-time comparison
+    if not hmac.compare_digest(password, _ADMIN_PASSWORD):
+        return jsonify({"error": "Mot de passe incorrect"}), 401
+    # Generate session token
+    token = secrets.token_hex(32)
+    _sessions[token] = {"created": time.time(), "ip": request.remote_addr}
+    return jsonify({"success": True, "token": token})
+
+def require_session(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Accept both old token and new session
+        auth = request.headers.get("Authorization", "").replace("Bearer ", "")
+        # Check if it's a valid session
+        if auth in _sessions:
+            # Clean expired sessions (>24h)
+            expired = [t for t, s in _sessions.items() if time.time() - s["created"] > 86400]
+            for t in expired: del _sessions[t]
+            return f(*args, **kwargs)
+        # Fallback: check admin token (for backward compatibility)
+        if auth == ADMIN_TOKEN:
+            return f(*args, **kwargs)
+        return jsonify({"error": "Non autorisé"}), 401
+    return decorated
+
 
 
 if __name__ == "__main__":
