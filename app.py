@@ -16,7 +16,7 @@ from flask_cors import CORS
 
 # ═══ CONFIG ═══
 SECRET_KEY = os.environ.get("YIRIBA_SECRET", "SM-Licence-HMAC-2026-BurkinaFaso-SecretKey!@#$%")
-ADMIN_TOKEN = os.environ.get("YIRIBA_ADMIN_TOKEN", "yiriba-admin-2026")
+ADMIN_TOKEN = os.environ.get("YIRIBA_ADMIN_TOKEN", secrets.token_hex(32))
 DB_PATH = os.environ.get("YIRIBA_DB", "") or os.path.join(tempfile.gettempdir(), "yiriba_licenses.db")
 MAX_ACTIVATIONS = int(os.environ.get("YIRIBA_MAX_ACTIVATIONS", "5"))
 
@@ -341,6 +341,159 @@ def admin_revoke():
     db.execute("UPDATE licenses SET is_revoked = 1, revoked_at = datetime('now') WHERE license_key = ?", (license_key,))
     db.commit()
     return jsonify({"success": True, "message": f"Licence '{lic['school_name']}' révoquée"})
+
+
+
+# ═══ ADMIN: ACTION LOGS ═══
+@app.route("/api/admin/logs", methods=["GET"])
+@require_admin
+def admin_logs():
+    db = get_db()
+    try:
+        logs = db.execute("SELECT * FROM admin_logs ORDER BY id DESC LIMIT 200").fetchall()
+    except:
+        db.execute("""CREATE TABLE IF NOT EXISTS admin_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, target TEXT, details TEXT, ip TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        db.commit()
+        logs = []
+    return jsonify([dict(l) for l in logs])
+
+@app.route("/api/admin/logs", methods=["POST"])
+@require_admin
+def admin_log_action():
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    try:
+        db.execute("INSERT INTO admin_logs (action, target, details, ip) VALUES (?, ?, ?, ?)",
+                   (data.get("action", ""), data.get("target", ""), data.get("details", ""), data.get("ip", "")))
+        db.commit()
+    except: pass
+    return jsonify({"success": True})
+
+# ═══ ADMIN: ANALYTICS ═══
+@app.route("/api/admin/analytics", methods=["GET"])
+@require_admin
+def admin_analytics():
+    db = get_db()
+    for t in [
+        "CREATE TABLE IF NOT EXISTS activations (id INTEGER PRIMARY KEY AUTOINCREMENT, license_key TEXT NOT NULL, hardware_id TEXT NOT NULL, ip_address TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(license_key, hardware_id))",
+        "CREATE TABLE IF NOT EXISTS admin_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, target TEXT, details TEXT, ip TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+    ]:
+        try: db.execute(t)
+        except: pass
+    db.commit()
+    total = db.execute("SELECT COUNT(*) as c FROM licenses").fetchone()["c"]
+    active = db.execute("SELECT COUNT(*) as c FROM licenses WHERE is_revoked = 0").fetchone()["c"]
+    revoked = db.execute("SELECT COUNT(*) as c FROM licenses WHERE is_revoked = 1").fetchone()["c"]
+    by_pack = db.execute("SELECT pack, COUNT(*) as c FROM licenses GROUP BY pack").fetchall()
+    try:
+        daily = db.execute("SELECT date(created_at) as day, COUNT(*) as count FROM activations WHERE created_at >= datetime('now', '-30 days') GROUP BY day ORDER BY day").fetchall()
+    except: daily = []
+    prices = {"DEMO": 0, "ECOLE": 250000, "RESEAU_PRO": 450000}
+    rev = db.execute("SELECT pack, COUNT(*) as c FROM licenses WHERE pack != 'DEMO' GROUP BY pack").fetchall()
+    total_rev = sum(prices.get(r["pack"], 0) * r["c"] for r in rev)
+    try:
+        recent = db.execute("SELECT a.*, l.school_name, l.pack FROM activations a LEFT JOIN licenses l ON a.license_key = l.license_key ORDER BY a.id DESC LIMIT 10").fetchall()
+    except: recent = []
+    return jsonify({"total": total, "active": active, "revoked": revoked,
+        "by_pack": {r["pack"]: r["c"] for r in by_pack},
+        "daily_activations": [{"day": r["day"], "count": r["count"]} for r in daily],
+        "total_revenue": total_rev,
+        "recent_activations": [dict(r) for r in recent]})
+
+# ═══ ADMIN: NOTIFICATIONS ═══
+@app.route("/api/admin/notifications", methods=["GET"])
+@require_admin
+def admin_get_notifications():
+    db = get_db()
+    try:
+        notifs = db.execute("SELECT * FROM notifications ORDER BY id DESC LIMIT 50").fetchall()
+    except:
+        db.execute("CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, message TEXT NOT NULL, type TEXT DEFAULT 'info', is_active INTEGER DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        db.commit()
+        notifs = []
+    return jsonify([dict(n) for n in notifs])
+
+@app.route("/api/admin/notifications", methods=["POST"])
+@require_admin
+def admin_create_notification():
+    data = request.get_json(silent=True)
+    if not data: return jsonify({"error": "JSON requis"}), 400
+    title = data.get("title", "").strip()
+    message = data.get("message", "").strip()
+    ntype = data.get("type", "info")
+    if not title or not message: return jsonify({"error": "title et message requis"}), 400
+    db = get_db()
+    try:
+        db.execute("INSERT INTO notifications (title, message, type) VALUES (?, ?, ?)", (title, message, ntype))
+        db.commit()
+    except: return jsonify({"error": "Erreur DB"}), 500
+    return jsonify({"success": True})
+
+@app.route("/api/admin/notifications/<int:notif_id>", methods=["DELETE"])
+@require_admin
+def admin_delete_notification(notif_id):
+    db = get_db()
+    db.execute("DELETE FROM notifications WHERE id = ?", (notif_id,))
+    db.commit()
+    return jsonify({"success": True})
+
+@app.route("/api/notifications", methods=["GET"])
+def public_notifications():
+    db = get_db()
+    try: notifs = db.execute("SELECT id, title, message, type, created_at FROM notifications WHERE is_active = 1 ORDER BY id DESC LIMIT 5").fetchall()
+    except: notifs = []
+    return jsonify([dict(n) for n in notifs])
+
+# ═══ ADMIN: PACKS CONFIG ═══
+@app.route("/api/admin/packs", methods=["GET"])
+@require_admin
+def admin_get_packs():
+    db = get_db()
+    try: packs = db.execute("SELECT * FROM pack_config ORDER BY id").fetchall()
+    except:
+        db.execute("CREATE TABLE IF NOT EXISTS pack_config (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, max_eleves INTEGER DEFAULT -1, max_pc INTEGER DEFAULT 1, duree_jours INTEGER DEFAULT 365, prix INTEGER DEFAULT 0, features TEXT DEFAULT '')")
+        db.commit()
+        for p in [("DEMO", 150, 1, 365, 0, "Base,Watermark"), ("ECOLE", -1, 1, -1, 250000, "Tout,QR local"), ("RESEAU_PRO", -1, 5, -1, 450000, "Tout,QR verifiable,Reseau")]:
+            try: db.execute("INSERT OR IGNORE INTO pack_config (name, max_eleves, max_pc, duree_jours, prix, features) VALUES (?, ?, ?, ?, ?, ?)", p)
+            except: pass
+        db.commit()
+        packs = db.execute("SELECT * FROM pack_config ORDER BY id").fetchall()
+    return jsonify([dict(p) for p in packs])
+
+@app.route("/api/admin/packs", methods=["PUT"])
+@require_admin
+def admin_update_packs():
+    data = request.get_json(silent=True)
+    if not data or "packs" not in data: return jsonify({"error": "packs requis"}), 400
+    db = get_db()
+    for p in data["packs"]:
+        db.execute("UPDATE pack_config SET max_eleves=?, max_pc=?, duree_jours=?, prix=?, features=? WHERE name=?",
+                   (p["max_eleves"], p["max_pc"], p["duree_jours"], p["prix"], p.get("features", ""), p["name"]))
+    db.commit()
+    return jsonify({"success": True})
+
+# ═══ ADMIN: ABUSE ═══
+@app.route("/api/admin/abuse", methods=["GET"])
+@require_admin
+def admin_abuse_check():
+    db = get_db()
+    try:
+        abuse = db.execute("SELECT l.school_name, l.license_key, l.pack, l.max_pc, COUNT(DISTINCT a.hardware_id) as pc_count, GROUP_CONCAT(DISTINCT a.hardware_id) as hw_ids FROM licenses l JOIN activations a ON l.license_key = a.license_key GROUP BY l.license_key HAVING pc_count > l.max_pc AND l.max_pc > 0").fetchall()
+    except: abuse = []
+    return jsonify([dict(a) for a in abuse])
+
+# ═══ ADMIN: EXPORT CSV ═══
+@app.route("/api/admin/export", methods=["GET"])
+@require_admin
+def admin_export():
+    db = get_db()
+    licenses = db.execute("SELECT * FROM licenses ORDER BY id").fetchall()
+    csv_lines = ["Id,SchoolName,Pack,HardwareId,ActivationDate,Expiration,MaxEleves,MaxPC,IsRevoked"]
+    for l in licenses:
+        csv_lines.append(f"{l['id']},{l['school_name']},{l['pack']},{l.get('hardware_id','')},{l.get('date_activation','')},{l.get('date_expiration','')},{l.get('max_eleves',0)},{l.get('max_pc',1)},{l.get('is_revoked',0)}")
+    from flask import Response
+    return Response("\n".join(csv_lines), mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=yiriba_licenses.csv"})
+
 
 
 if __name__ == "__main__":
