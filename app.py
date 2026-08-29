@@ -336,8 +336,8 @@ def admin_stats():
     return jsonify({"total": total, "active": active, "revoked": revoked, "by_pack": {r["pack"]: r["c"] for r in by_pack}})
 
 
-@require_admin
 @app.route("/api/admin/revoke-quick", methods=["POST"])
+@require_admin
 def admin_revoke_quick():
     """Révoque une licence par nom d'école — protégé par un code simple."""
     data = request.get_json(silent=True)
@@ -358,8 +358,8 @@ def admin_revoke_quick():
     return jsonify({"success": True, "message": f"Licence '{school}' révoquée"})
 
 
-@require_admin
 @app.route("/api/admin/reactivate-quick", methods=["POST"])
+@require_admin
 def admin_reactivate_quick():
     """Réactive une licence par nom d'école."""
     data = request.get_json(silent=True)
