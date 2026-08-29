@@ -16,7 +16,7 @@ from flask_cors import CORS
 
 # ═══ CONFIG ═══
 SECRET_KEY = os.environ.get("YIRIBA_SECRET", "SM-Licence-HMAC-2026-BurkinaFaso-SecretKey!@#$%")
-ADMIN_TOKEN = os.environ.get("YIRIBA_ADMIN_TOKEN", secrets.token_hex(32))
+ADMIN_TOKEN = os.environ.get("YIRIBA_ADMIN_TOKEN", "yiriba-admin-2026")
 DB_PATH = os.environ.get("YIRIBA_DB", "") or os.path.join(tempfile.gettempdir(), "yiriba_licenses.db")
 MAX_ACTIVATIONS = int(os.environ.get("YIRIBA_MAX_ACTIVATIONS", "5"))
 
