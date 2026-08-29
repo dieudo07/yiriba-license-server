@@ -88,7 +88,7 @@ PACKS = {
 }
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={r"/api/*": {"origins": ["https://schoolmanager-bf.github.io"]}})
 
 _db_initialized = False
 
