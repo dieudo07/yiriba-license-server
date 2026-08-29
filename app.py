@@ -496,6 +496,17 @@ def admin_export():
 
 
 
+
+@app.route("/api/packs", methods=["GET"])
+def public_packs():
+    db = get_db()
+    try:
+        packs = db.execute("SELECT name, max_eleves, max_pc, duree_jours, prix, features FROM pack_config ORDER BY id").fetchall()
+    except:
+        packs = []
+    return jsonify([dict(p) for p in packs])
+
+
 if __name__ == "__main__":
     print(f"\n  YIRIBA LICENSE SERVER v1.0 — {DB_PATH}\n")
     app.run(host="0.0.0.0", port=5000, debug=False)
